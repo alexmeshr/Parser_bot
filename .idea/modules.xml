@@ -3,6 +3,7 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/.idea/SarovBot.iml" filepath="$PROJECT_DIR$/.idea/SarovBot.iml" />
+      <module fileurl="file://$PROJECT_DIR$/../python_parser/.idea/python_parser.iml" filepath="$PROJECT_DIR$/../python_parser/.idea/python_parser.iml" />
     </modules>
   </component>
 </project>

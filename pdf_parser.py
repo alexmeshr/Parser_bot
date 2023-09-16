@@ -1,6 +1,7 @@
-file = "./pdf_files/file_25.pdf"
 groups = [["ВМ-123","СКТ-123","ТФ-123","ЛНОФ-123","ЭЭП-123"],["ВМ-222","СТФИ-222","ТФ-222","ЛНОФ-222","ЭЭП-222"]]
 days = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота"]
+times = ["09.0010.35", "10.4512.20", "12.3014.05", "15.0016.35", "16.4518.20", "18.3020.05"]
+error_list = []
 
 
 from pdfminer.layout import LAParams, LTTextBox
@@ -41,8 +42,14 @@ def find_date(s):
         return None
 
 
+def find_time(s):
+    f = re.search(r"[0-9]+.[0-9]+", s)
+    s = f[0] if f is not None else  ""
+    return s
+
 def find_column_boxes(objects, arrays_of_groups, days):
     cnt = 0
+    to_del = []
     course, day, day_box, date = None,None,None,None
     group_boxes = {}
     t_objects = iter(objects)
@@ -53,19 +60,23 @@ def find_column_boxes(objects, arrays_of_groups, days):
                 if word in arrays_of_groups[i]:
                     course = i
                     cnt += 1
-                    group_boxes[obj] = word
+                    group_boxes[word] = obj
+                    to_del.append(obj)
                 elif to_standard(objects[obj].split()[-1]) in arrays_of_groups[i]:
                     course = i
                     cnt += 1
-                    group_boxes[((obj[1]+obj[0])/2, obj[1], obj[2], obj[3])] = to_standard(objects[obj].split()[-1])
+                    group_boxes[to_standard(objects[obj].split()[-1])] = ((obj[1]+obj[0])/2, obj[1], obj[2], obj[3])
+                    to_del.append(obj)
         else:
             word = to_standard(objects[obj])
             if word in arrays_of_groups[course]:
-                group_boxes[obj] = word
+                group_boxes[word] = obj
                 cnt += 1
+                to_del.append(obj)
             elif to_standard(objects[obj].split()[-1]) in arrays_of_groups[course]:
                 cnt += 1
-                group_boxes[((obj[1] + obj[0]) / 2, obj[1], obj[2], obj[3])] = to_standard(objects[obj].split()[-1])
+                group_boxes[to_standard(objects[obj].split()[-1])] = ((obj[1] + obj[0]) / 2, obj[1], obj[2], obj[3])
+                to_del.append(obj)
 
         if day is None:
             word = to_cyrillic(objects[obj].split()[0].lower())
@@ -93,9 +104,80 @@ def find_column_boxes(objects, arrays_of_groups, days):
                             cnt += 1
                             break
         if course is not None and cnt == len(arrays_of_groups[course])+1:
+            for k in to_del:
+                objects.pop(k, None)
             return group_boxes, day_box, day, date, course, False
+    for k in to_del:
+        objects.pop(k, None)
     return group_boxes, day_box, day, date, course, True
-    #return group_boxes, day_box, day, date, course
+
+
+def set_col_coords(day_box, group_boxes, groups):
+    coords = [[day_box[0], day_box[1]]]
+    for _ in range(len(groups)):
+        coords.append([0, 0])
+    for idx, g in enumerate(groups):
+        if g in group_boxes:
+            coords[idx+1][0] = group_boxes[g][0]
+            coords[idx][1] = group_boxes[g][0]
+        else:
+            prev = group_boxes[groups[idx-1]][0] if idx > 0 else day_box[0]
+            next = group_boxes[groups[idx+1]][0] if idx < len(groups)-1 else 10000
+            med = (prev + next)/2
+            coords[idx + 1][0] = med
+            coords[idx][1] = med
+    coords[-1][1]=10000
+    return coords
+
+
+def parse_columns(col_coords, groups, objects):
+    columns = {"times": []}
+    for g in groups:
+        columns[g] = []
+    for obj in objects:
+        for idx, (x1, x2) in enumerate(col_coords):
+            if obj[0]>= x1 and obj[0]<=x2 or obj[1]>= x1 and obj[1]<=x2:
+                col = "times"
+                if idx > 0:
+                    col = groups[idx-1]
+                columns[col].append([objects[obj], obj[0], obj[1], obj[2], obj[3]])
+    return columns
+
+
+def set_row_coords(column, times):
+    time_boxes = {t:[0] for t in times}
+    for r in column:
+        for t in times:
+            str = find_time(r[0])
+            if str in t and len(str)>=4:
+                time_boxes[t].extend([r[3], r[4]])
+    for t in time_boxes:
+        if len(time_boxes[t]) == 0:
+            prev = max(time_boxes[times[times.index(t)-1]]) if times.index(t)>0 else 1000
+            next = max(time_boxes[times[times.index(t)+1]]) if times.index(t)<len(times)-1 else 0
+            coord = (prev+next)/2
+            time_boxes[t].append(coord)
+    coords = [max(time_boxes[t]) for t in time_boxes]
+    coords.append(0)
+    row_coords = [(coords[i], coords[i+1]) for i in range(len(coords)-1)]
+    return row_coords
+
+
+def create_schedule(columns, times, row_coords, delta=2):
+    schedule = {}
+    columns.pop("times", None)
+    for c in columns:
+        schedule[c] = {t:[] for t in times}
+        for idx, t in enumerate(times):
+            for obj in columns[c]:
+                if obj[4]-delta<=row_coords[idx][0] and obj[3]+delta>=row_coords[idx][1]:
+                    schedule[c][t].append(obj)
+        for t in times:
+            schedule[c][t].sort(key=lambda x: -x[3])
+            for i in range(len(schedule[c][t])-1):
+                if schedule[c][t][i][3]==schedule[c][t][i+1][4]:
+                    schedule[c][t][i], schedule[c][t][i+1] = schedule[c][t][i+1], schedule[c][t][i]
+    return schedule
 
 
 def parse_pdf(file, groups, days, logging=False):
@@ -105,6 +187,7 @@ def parse_pdf(file, groups, days, logging=False):
     device = PDFPageAggregator(rsrcmgr, laparams=laparams)
     interpreter = PDFPageInterpreter(rsrcmgr, device)
     pages = PDFPage.get_pages(fp)
+    pgnum = 0
     for page in pages:
         objects = {}
         interpreter.process_page(page)
@@ -121,22 +204,33 @@ def parse_pdf(file, groups, days, logging=False):
                         objects[(x1, x2, y1+i*(i_height), y1+(i+1)*(i_height))] = lines[i]
                 else:
                     objects[(x1, x2, y1, y2)] = lines[0]
-        group_boxes,day_box, day, date, course, error = find_column_boxes(objects, groups, days)
+        group_boxes, day_box, day, date, course, error_c = find_column_boxes(objects, groups, days)
+        #time_boxes, error_r = find_row_boxes(objects, times)
         if logging:
             for obj in group_boxes:
                 print(obj, group_boxes[obj])
             print(day_box, day, "\n", date, "\n")
-        if error:
-            raise Exception
+        if error_c:# or error_r:
+            global error_list
+            error_list.append(file+" " + str(pgnum)+" c" if error_c else " r")
+        columns = None
+        col_coords=[]
+        if course is not None:
+            col_coords = set_col_coords(day_box, group_boxes, groups[course])
+            columns = parse_columns(col_coords, groups[course], objects)
+            row_coords = set_row_coords(columns["times"], times)
+            schedule = create_schedule(columns, times, row_coords)
+        pgnum += 1
+
 
 if __name__ == "__main__":
-    #"""
+    file = "./pdf_files/file_10.pdf"
+    parse_pdf(file, groups, days, logging=False)
     for f in os.listdir("./pdf_files/"):
         print(f)
-        #if f!="file_25.pdf":
         parse_pdf("./pdf_files/"+f, groups, days, logging=True)
-    #"""
-    #parse_pdf(file, groups, days, logging=False)
+    print(error_list)
+
 """
 At (156.9, 359.4870000000001, 334.003, 348.413) is text: Методы численного решения уравнений
 At (199.9, 316.53299999999996, 321.303, 335.713) is text: гиперболического типа
@@ -147,4 +241,10 @@ At (563.6, 804.8629999999999, 334.003, 348.413) is text: Встреча с на�
 At (62.6, 125.443, 334.003, 373.927) is text: понедельник 
 04.09
 09.00 – 10.35
+10.45 – 12.20
+12.30 – 14.05
+15.00 – 16.35
+16.45 – 18.20
+18.30 - 20.05
 """
+
