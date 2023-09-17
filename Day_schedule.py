@@ -11,6 +11,9 @@ class Day_schedule:
         self.groups = groups
         self.schedule = {g:{} for g in groups}
 
-
     def import_data(self, data):
-        pass
+        for col in data:
+            self.schedule[col] = data[col]
+
+    def get_table_for_group(self, group):
+        return self.schedule[group]

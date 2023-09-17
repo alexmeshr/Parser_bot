@@ -1,9 +1,14 @@
-groups = [["ВМ-123","СКТ-123","ТФ-123","ЛНОФ-123","ЭЭП-123"],["ВМ-222","СТФИ-222","ТФ-222","ЛНОФ-222","ЭЭП-222"]]
+groups = ["ВМ-123","СКТ-123","ТФ-123","ЛНОФ-123","ЭЭП-123", "ВМ-222","СТФИ-222","ТФ-222","ЛНОФ-222","ЭЭП-222"]
+course_counts = [5,5]
 days = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота"]
 times = ["09.0010.35", "10.4512.20", "12.3014.05", "15.0016.35", "16.4518.20", "18.3020.05"]
 error_list = []
+FIRST_COURSE_CNT=5
 
 
+import datetime
+from Day_schedule import Day_schedule
+from datetime import date, datetime, timedelta
 from pdfminer.layout import LAParams, LTTextBox
 from pdfminer.pdfpage import PDFPage
 from pdfminer.pdfinterp import PDFResourceManager
@@ -47,33 +52,33 @@ def find_time(s):
     s = f[0] if f is not None else  ""
     return s
 
-def find_column_boxes(objects, arrays_of_groups, days):
+def find_column_boxes(objects, arrays_of_groups, days, course_counts):
     cnt = 0
     to_del = []
-    course, day, day_box, date = None,None,None,None
+    course, day, day_box, date_str = 0, None, None, None
     group_boxes = {}
     t_objects = iter(objects)
     for obj in t_objects:
         if course is None:
-            for i in range(len(arrays_of_groups)):
                 word = to_standard(objects[obj])
-                if word in arrays_of_groups[i]:
-                    course = i
+                if word in arrays_of_groups:
+                    course = 0 if arrays_of_groups.index(word)<= FIRST_COURSE_CNT else 1
                     cnt += 1
                     group_boxes[word] = obj
                     to_del.append(obj)
-                elif to_standard(objects[obj].split()[-1]) in arrays_of_groups[i]:
-                    course = i
+                elif to_standard(objects[obj].split()[-1]) in arrays_of_groups:
+                    word = to_standard(objects[obj].split()[-1])
+                    course = 0 if arrays_of_groups.index(word)<= FIRST_COURSE_CNT else 1
                     cnt += 1
-                    group_boxes[to_standard(objects[obj].split()[-1])] = ((obj[1]+obj[0])/2, obj[1], obj[2], obj[3])
+                    group_boxes[word] = ((obj[1]+obj[0])/2, obj[1], obj[2], obj[3])
                     to_del.append(obj)
         else:
             word = to_standard(objects[obj])
-            if word in arrays_of_groups[course]:
+            if word in arrays_of_groups:
                 group_boxes[word] = obj
                 cnt += 1
                 to_del.append(obj)
-            elif to_standard(objects[obj].split()[-1]) in arrays_of_groups[course]:
+            elif to_standard(objects[obj].split()[-1]) in arrays_of_groups:
                 cnt += 1
                 group_boxes[to_standard(objects[obj].split()[-1])] = ((obj[1] + obj[0]) / 2, obj[1], obj[2], obj[3])
                 to_del.append(obj)
@@ -84,13 +89,13 @@ def find_column_boxes(objects, arrays_of_groups, days):
                 day = word
                 day_box = obj
                 if len(objects[obj].split()) > 1:
-                    date = objects[obj].split()[1]
+                    date_str = objects[obj].split()[1]
                 else:
                     if find_date(objects[obj].split()[0].lower()) is None:
                         date_box = next(t_objects, None)
-                        date = objects[date_box]
+                        date_str = objects[date_box]
                     else:
-                        date = find_date(objects[obj].split()[0].lower())
+                        date_str = find_date(objects[obj].split()[0].lower())
                 cnt += 1
             else:
                 for d in days:
@@ -100,16 +105,16 @@ def find_column_boxes(objects, arrays_of_groups, days):
                         if word+end.split()[0] in days:
                             day = word+end.split()[0]
                             day_box = obj
-                            date = end.split()[1]
+                            date_str = end.split()[1]
                             cnt += 1
                             break
-        if course is not None and cnt == len(arrays_of_groups[course])+1:
+        if cnt == course_counts[course]+1:
             for k in to_del:
                 objects.pop(k, None)
-            return group_boxes, day_box, day, date, course, False
+            return group_boxes, day_box, day, date_str, course, False
     for k in to_del:
         objects.pop(k, None)
-    return group_boxes, day_box, day, date, course, True
+    return group_boxes, day_box, day, date_str, course, True
 
 
 def set_col_coords(day_box, group_boxes, groups):
@@ -180,7 +185,7 @@ def create_schedule(columns, times, row_coords, delta=2):
     return schedule
 
 
-def parse_pdf(file, groups, days, logging=False):
+def parse_pdf(nearest_scedule, file, groups, days, logging=False):
     fp = open(file, 'rb')
     rsrcmgr = PDFResourceManager()
     laparams = LAParams()
@@ -204,7 +209,9 @@ def parse_pdf(file, groups, days, logging=False):
                         objects[(x1, x2, y1+i*(i_height), y1+(i+1)*(i_height))] = lines[i]
                 else:
                     objects[(x1, x2, y1, y2)] = lines[0]
-        group_boxes, day_box, day, date, course, error_c = find_column_boxes(objects, groups, days)
+        group_boxes, day_box, day, date_str, course, error_c = find_column_boxes(objects, groups, days, course_counts)
+        g_start = 0 if course==0 else sum(course_counts[i] for i in range(course))
+        cur_groups = groups[g_start:g_start+course_counts[course]]
         #time_boxes, error_r = find_row_boxes(objects, times)
         if logging:
             for obj in group_boxes:
@@ -214,21 +221,31 @@ def parse_pdf(file, groups, days, logging=False):
             global error_list
             error_list.append(file+" " + str(pgnum)+" c" if error_c else " r")
         columns = None
+        pgnum += 1
         col_coords=[]
-        if course is not None:
-            col_coords = set_col_coords(day_box, group_boxes, groups[course])
-            columns = parse_columns(col_coords, groups[course], objects)
+        if date is not None:
+            d, m = [int(x) for x in date_str.split('.')]
+            y = datetime.now().year if m >= datetime.now().month else datetime.now().year + 1
+            td = date(y, m, d)
+            if td.timetuple().tm_yday not in nearest_scedule:
+                print("passed")
+                continue
+            col_coords = set_col_coords(day_box, group_boxes, cur_groups)
+            columns = parse_columns(col_coords, cur_groups, objects)
             row_coords = set_row_coords(columns["times"], times)
             schedule = create_schedule(columns, times, row_coords)
-        pgnum += 1
+            nearest_scedule[td.timetuple().tm_yday].import_data(schedule)
 
 
 if __name__ == "__main__":
-    file = "./pdf_files/file_10.pdf"
-    parse_pdf(file, groups, days, logging=False)
+    #file = "./pdf_files/file_10.pdf"
+    #parse_pdf(file, groups, days, logging=False)
+    nearest_scedule = {(datetime.today().timetuple().tm_yday + i): Day_schedule((datetime.today() + timedelta(days=i)), groups) for i in range(14-datetime.today().weekday())}
     for f in os.listdir("./pdf_files/"):
         print(f)
-        parse_pdf("./pdf_files/"+f, groups, days, logging=True)
+        parse_pdf(nearest_scedule, "./pdf_files/"+f, groups, days, logging=False)
+    for s in nearest_scedule:
+        print(nearest_scedule[s].get_table_for_group("ВМ-123"))
     print(error_list)
 
 """
