@@ -1,22 +1,19 @@
-groups = ["ВМ-123","СКТ-123","ТФ-123","ЛНОФ-123","ЭЭП-123", "ВМ-222","СТФИ-222","ТФ-222","ЛНОФ-222","ЭЭП-222"]
-course_counts = [5,5]
-days = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота"]
-times = ["09.0010.35", "10.4512.20", "12.3014.05", "15.0016.35", "16.4518.20", "18.3020.05"]
-error_list = []
-FIRST_COURSE_CNT=5
-
-
+import os
+import re
 import datetime
-from Day_schedule import Day_schedule
+
+import bot_init
+from PDF_parsing.Day_schedule import Day_schedule
 from datetime import date, datetime, timedelta
 from pdfminer.layout import LAParams, LTTextBox
 from pdfminer.pdfpage import PDFPage
 from pdfminer.pdfinterp import PDFResourceManager
 from pdfminer.pdfinterp import PDFPageInterpreter
 from pdfminer.converter import PDFPageAggregator
-import os
-import re
+from bot_init import groups, course_counts
 
+
+error_list = []
 
 def to_cyrillic(s):
     # защита от рукожопов, которые путают раскладки(Да не бомбит у меня)
@@ -62,13 +59,13 @@ def find_column_boxes(objects, arrays_of_groups, days, course_counts):
         if course is None:
                 word = to_standard(objects[obj])
                 if word in arrays_of_groups:
-                    course = 0 if arrays_of_groups.index(word)<= FIRST_COURSE_CNT else 1
+                    course = 0 if arrays_of_groups.index(word)<= course_counts[0] else 1
                     cnt += 1
                     group_boxes[word] = obj
                     to_del.append(obj)
                 elif to_standard(objects[obj].split()[-1]) in arrays_of_groups:
                     word = to_standard(objects[obj].split()[-1])
-                    course = 0 if arrays_of_groups.index(word)<= FIRST_COURSE_CNT else 1
+                    course = 0 if arrays_of_groups.index(word)<= course_counts[0] else 1
                     cnt += 1
                     group_boxes[word] = ((obj[1]+obj[0])/2, obj[1], obj[2], obj[3])
                     to_del.append(obj)
@@ -185,7 +182,10 @@ def create_schedule(columns, times, row_coords, delta=2):
     return schedule
 
 
-def parse_pdf(nearest_scedule, file, groups, days, logging=False):
+def parse_pdf(nearest_scedule, file, groups, logging=False):
+    days = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота"]
+    times = [t.replace("-", "").replace(" ", "") for t in bot_init.times]
+        #["09.0010.35", "10.4512.20", "12.3014.05", "15.0016.35", "16.4518.20", "18.3020.05"]
     fp = open(file, 'rb')
     rsrcmgr = PDFResourceManager()
     laparams = LAParams()
@@ -227,25 +227,24 @@ def parse_pdf(nearest_scedule, file, groups, days, logging=False):
             d, m = [int(x) for x in date_str.split('.')]
             y = datetime.now().year if m >= datetime.now().month else datetime.now().year + 1
             td = date(y, m, d)
-            if td.timetuple().tm_yday not in nearest_scedule:
+            if td.timetuple().tm_yday not in nearest_scedule: #надо будет починить, не сработает для предъянварских дней
                 print("passed")
                 continue
             col_coords = set_col_coords(day_box, group_boxes, cur_groups)
             columns = parse_columns(col_coords, cur_groups, objects)
             row_coords = set_row_coords(columns["times"], times)
             schedule = create_schedule(columns, times, row_coords)
-            nearest_scedule[td.timetuple().tm_yday].import_data(schedule)
+            nearest_scedule[td.timetuple().tm_yday] = schedule
 
 
 if __name__ == "__main__":
+    print("11.3 - 34.6")
     #file = "./pdf_files/file_10.pdf"
     #parse_pdf(file, groups, days, logging=False)
-    nearest_scedule = {(datetime.today().timetuple().tm_yday + i): Day_schedule((datetime.today() + timedelta(days=i)), groups) for i in range(14-datetime.today().weekday())}
+    nearest_scedule = {(datetime.today().timetuple().tm_yday + i): [] for i in range(14-datetime.today().weekday())}
     for f in os.listdir("./pdf_files/"):
         print(f)
-        parse_pdf(nearest_scedule, "./pdf_files/"+f, groups, days, logging=False)
-    for s in nearest_scedule:
-        print(nearest_scedule[s].get_table_for_group("ВМ-123"))
+        parse_pdf(nearest_scedule, "./pdf_files/"+f, groups, logging=False)
     print(error_list)
 
 """
